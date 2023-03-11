@@ -1,4 +1,3 @@
-
 import asyncio
 import datetime
 from aiohttp import ClientSession
@@ -6,15 +5,14 @@ from more_itertools import chunked
 from models import engine, Session, Base, SwapiPeople
 
 
-CHUNK_SIZE = 10
+CHUNK_SIZE = 3
 
-async def get_people(session, people_id: int) -> dict:
+async def get_people(session: ClientSession, people_id: int) -> dict:
     async with session.get(f'https://swapi.dev/api/people/{people_id}') as response:
+        if response.status != 200:
+            return []
         people_json = await response.json()
-        print(f'Загрузили json id={people_id}')
-        print(f'Загрузили json films=', people_json['films'])
-        if response.status == 200:
-            result = {'id': people_id, 
+    result = {'id': people_id, 
             'birth_year': people_json['birth_year'],
             'eye_color': people_json['eye_color'],
             'films': people_json['films'],
@@ -28,17 +26,28 @@ async def get_people(session, people_id: int) -> dict:
             'species': people_json['species'],
             'starships': people_json['starships'],
             'vehicles': people_json['vehicles'],
-            }
-            return result
+            }    
+    print(f'Загрузили json id={people_id}')
+
+    result['films'] = await get_titles(session, people_json['films'], 'title')
+    print('Получили "films" у id=', people_id)
+    result['species'] = await get_titles(session, people_json['species'], 'name')
+    print('Получили "species" у id=', people_id)
+    result['starships'] = await get_titles(session, people_json['starships'], 'name')
+    print('Получили "starships" у id=', people_id)
+    result['vehicles'] = await get_titles(session, people_json['vehicles'], 'name')
+    print('Получили "vehicles" у id=', people_id)
+
+    return result
 
 
-async def get_titles(session, links: list) -> str:
-    result = []
+async def get_titles(session, links: list, key: str) -> str:    
+    all_name = []
     for link in links:
-        async with session.get(link) as response:
-            name = await response.json()['name']
-            result.append(name)
-    return "".join(result)
+        async with session.get(link) as response:  
+            name = await response.json()
+            all_name.append(name[key])
+    return  ', '.join(all_name)
 
 
 async def paste_to_db(results: dict):
@@ -56,10 +65,10 @@ async def main():
         await conn.commit()
 
     session = ClientSession()
-    coros = (get_people(session, i) for i in range(18, 25))
+    coros = (get_people(session, i) for i in range(1, 90))
     for coros_chunk in chunked(coros, CHUNK_SIZE):
         res_list = await asyncio.gather(*coros_chunk)
-        res_list = await asyncio.gather(i for i in res_list)
+        res_list = [i for i in res_list if i] # Удалить пустые списки
         for res in res_list:
             asyncio.create_task(paste_to_db(res))
     await session.close()  
